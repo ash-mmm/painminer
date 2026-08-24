@@ -12,11 +12,23 @@ type Pain = {
   title: string;
   score: number;
   description: string;
+
+  frequencyScore: number;
+  severityScore: number;
+  willingnessToPayScore: number;
+  automationFitScore: number;
+  evidenceScore: number;
+
+  supportingConversations: number;
+
   evidence: Evidence[];
+
   opportunity: string;
   customer: string;
   whyTheyWouldPay: string;
   validationExperiment: string;
+
+  uniqueSources: number;
 };
 
 export default function Home() {
@@ -36,29 +48,35 @@ export default function Home() {
     setPains([]);
     setConversationsAnalyzed(0);
 
-    const response = await fetch("/api/analyze", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        market: market,
-      }),
-    });
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          market: market,
+        }),
+      });
 
-    const data = await response.json();
+      const data = await response.json();
 
-    if (!response.ok) {
-      console.error(data.error);
+      if (!response.ok) {
+        console.error(data.error);
+        setPains([]);
+        setConversationsAnalyzed(0);
+        return;
+      }
+
+      setPains(data.pains);
+      setConversationsAnalyzed(data.conversationsAnalyzed);
+    } catch (error) {
+      console.error("Request failed:", error);
       setPains([]);
       setConversationsAnalyzed(0);
+    } finally {
       setLoading(false);
-      return;
     }
-
-    setPains(data.pains);
-    setConversationsAnalyzed(data.conversationsAnalyzed);
-    setLoading(false);
   }
 
   return (
@@ -91,7 +109,7 @@ export default function Home() {
               <button
                 type="submit"
                 disabled={loading}
-                className="rounded-xl bg-black px-6 py-4 font-medium text-white transition hover:bg-gray-800 disabled:opacity-50"
+                className="rounded-xl bg-black px-6 py-4 font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {loading ? "Analyzing..." : "Find Problems"}
               </button>
@@ -129,9 +147,7 @@ export default function Home() {
                 >
                   <div className="flex items-start justify-between gap-6">
                     <div>
-                      <h3 className="text-xl font-semibold">
-                        {pain.title}
-                      </h3>
+                      <h3 className="text-xl font-semibold">{pain.title}</h3>
 
                       <p className="mt-3 leading-7 text-gray-600">
                         {pain.description}
@@ -142,6 +158,58 @@ export default function Home() {
                       {pain.score}/100
                     </span>
                   </div>
+
+                  <div className="mt-6 grid grid-cols-2 gap-3 border-t border-gray-100 pt-6 sm:grid-cols-5">
+                    <div className="rounded-xl bg-gray-50 p-3 text-center">
+                      <p className="text-lg font-semibold">
+                        {pain.frequencyScore}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500">
+                        Frequency
+                      </p>
+                    </div>
+
+                    <div className="rounded-xl bg-gray-50 p-3 text-center">
+                      <p className="text-lg font-semibold">
+                        {pain.severityScore}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500">
+                        Severity
+                      </p>
+                    </div>
+
+                    <div className="rounded-xl bg-gray-50 p-3 text-center">
+                      <p className="text-lg font-semibold">
+                        {pain.willingnessToPayScore}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500">
+                        Willingness
+                      </p>
+                    </div>
+
+                    <div className="rounded-xl bg-gray-50 p-3 text-center">
+                      <p className="text-lg font-semibold">
+                        {pain.automationFitScore}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500">
+                        Automation
+                      </p>
+                    </div>
+
+                    <div className="rounded-xl bg-gray-50 p-3 text-center">
+                      <p className="text-lg font-semibold">
+                        {pain.evidenceScore}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500">
+                        Evidence
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="mt-3 text-sm text-gray-500">
+                    Supported by {pain.supportingConversations} independent conversations
+                    {" "}across {pain.uniqueSources} sources
+                  </p>
 
                   <div className="mt-6 border-t border-gray-100 pt-6">
                     <p className="text-sm font-semibold uppercase tracking-wide text-gray-500">

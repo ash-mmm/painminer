@@ -1,7 +1,16 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
+
 import type { Conversation } from "@/lib/search";
+import type { ExtractedPain } from "@/lib/extract";
+import type { PainCluster } from "@/lib/cluster";
+
+import {
+    calculateFrequencyScore,
+    calculateSeverityScore,
+    calculateEvidenceScore,
+} from "@/lib/scoring";
 
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
@@ -13,199 +22,368 @@ const EvidenceSchema = z.object({
     url: z.string(),
 });
 
-const PainSchema = z.object({
-    title: z.string(),
+const EvaluatedClusterSchema = z.object({
+    clusterIndex: z.number(),
 
-    description: z.string(),
-
-    score: z.number().min(0).max(100),
+    willingnessToPayScore: z.number().min(0).max(10),
+    automationFitScore: z.number().min(0).max(10),
 
     evidence: z.array(EvidenceSchema).min(1).max(3),
 
     opportunity: z.string(),
-
     customer: z.string(),
-
     whyTheyWouldPay: z.string(),
-
     validationExperiment: z.string(),
 });
 
-const PainAnalysisSchema = z.object({
-    pains: z.array(PainSchema).min(3).max(5),
+const AnalysisSchema = z.object({
+    clusters: z.array(EvaluatedClusterSchema),
 });
 
-export type Pain = z.infer<typeof PainSchema>;
+export type Pain = {
+    title: string;
+    description: string;
 
-export async function analyzeConversations(
+    score: number;
+
+    frequencyScore: number;
+    severityScore: number;
+    willingnessToPayScore: number;
+    automationFitScore: number;
+    evidenceScore: number;
+
+    supportingConversations: number;
+    uniqueSources: number;
+
+    evidence: {
+        text: string;
+        source: string;
+        url: string;
+    }[];
+
+    opportunity: string;
+    customer: string;
+    whyTheyWouldPay: string;
+    validationExperiment: string;
+};
+
+export async function analyzeClusters(
     market: string,
+    clusters: PainCluster[],
+    extractedPains: ExtractedPain[],
     conversations: Conversation[]
 ): Promise<Pain[]> {
-    const conversationText = conversations
-        .map(
-            (conversation, index) => `
-Conversation ${index + 1}
+    const clusterMetadata = clusters.map(
+        (cluster, clusterIndex) => {
+            const conversationIndexes =
+                new Set<number>();
 
-Title: ${conversation.title}
-Text: ${conversation.text}
+            const sources =
+                new Set<string>();
+
+            const severityValues: number[] = [];
+
+            for (const painIndex of cluster.painIndexes) {
+                const pain = extractedPains[painIndex];
+
+                if (!pain) {
+                    continue;
+                }
+
+                conversationIndexes.add(
+                    pain.conversationIndex
+                );
+
+                severityValues.push(
+                    pain.severity
+                );
+
+                const conversation =
+                    conversations[pain.conversationIndex];
+
+                if (conversation) {
+                    sources.add(
+                        conversation.source
+                    );
+                }
+            }
+
+            const supportingConversations =
+                conversationIndexes.size;
+
+            const uniqueSources =
+                sources.size;
+
+            const frequencyScore =
+                calculateFrequencyScore(
+                    supportingConversations,
+                    conversations.length
+                );
+
+            const severityScore =
+                calculateSeverityScore(
+                    severityValues
+                );
+
+            const evidenceScore =
+                calculateEvidenceScore(
+                    supportingConversations,
+                    uniqueSources
+                );
+
+            return {
+                clusterIndex,
+                supportingConversations,
+                uniqueSources,
+                frequencyScore,
+                severityScore,
+                evidenceScore,
+            };
+        }
+    );
+
+    const clusterText = clusters
+        .map((cluster, clusterIndex) => {
+            const metadata =
+                clusterMetadata[clusterIndex];
+
+            const members = cluster.painIndexes
+                .map((painIndex) => {
+                    const pain =
+                        extractedPains[painIndex];
+
+                    if (!pain) {
+                        return null;
+                    }
+
+                    const conversation =
+                        conversations[
+                        pain.conversationIndex
+                        ];
+
+                    if (!conversation) {
+                        return null;
+                    }
+
+                    return `
+Pain index: ${painIndex}
+Problem: ${pain.problem}
+Severity: ${pain.severity}/10
+
+Evidence:
+${conversation.text}
+
 Source: ${conversation.source}
 URL: ${conversation.url}
-`
-        )
-        .join("\n");
+`;
+                })
+                .filter(Boolean)
+                .join("\n");
 
-    const response = await openai.responses.parse({
-        model: "gpt-5.6-luna",
+            return `
+CLUSTER ${clusterIndex}
 
-        input: [
-            {
-                role: "system",
-                content: `
-You are an expert startup researcher looking for commercially valuable
-problems that could become products or businesses.
+Title:
+${cluster.title}
 
-Your goal is NOT simply to summarize complaints.
+Description:
+${cluster.description}
 
-Your goal is to identify problems where:
+Supporting conversations:
+${metadata.supportingConversations}
 
-- a clear customer exists
-- the problem costs time, money, revenue, or operational efficiency
-- the problem occurs repeatedly
-- existing solutions appear inadequate
-- someone could realistically pay for a better solution
+Unique sources:
+${metadata.uniqueSources}
 
-Prefer business and professional problems over vague consumer dissatisfaction.
+Frequency score:
+${metadata.frequencyScore}/10
 
-Every piece of evidence MUST correspond to one of the supplied conversations.
+Severity score:
+${metadata.severityScore}/10
 
-When returning evidence:
+Evidence score:
+${metadata.evidenceScore}/10
 
-- copy or closely paraphrase the relevant evidence
-- return the exact Source field from that conversation
-- return the exact URL field from that conversation
+MEMBERS:
 
-Never invent URLs.
-Never invent sources.
-Do not use a URL from one conversation to support evidence from another.
+${members}
+`;
+        })
+        .join("\n\n");
+
+    const response =
+        await openai.responses.parse({
+            model: "gpt-5.6-luna",
+
+            input: [
+                {
+                    role: "system",
+                    content: `
+You are an expert startup researcher.
+
+Frequency, severity, and evidence quality
+have already been calculated by software.
+
+DO NOT recalculate or modify them.
+
+Your task is to assess the remaining
+commercial dimensions of each pain cluster.
+
+Do not invent evidence.
 `,
-            },
+                },
 
-            {
-                role: "user",
-                content: `
-Analyze the following conversations related to the market:
+                {
+                    role: "user",
+                    content: `
+Market: "${market}"
 
-"${market}"
+Evaluate the clusters below.
 
-Identify between 3 and 5 problems potentially worth building a business around.
+For each commercially meaningful cluster return:
 
-Prioritize problems involving:
+clusterIndex:
+The EXACT cluster number supplied.
 
-- repetitive manual work
-- administrative overhead
-- revenue loss
-- expensive workflows
-- staff time
-- fragmented tools
-- poor software
-- compliance or reporting burden
-- customer acquisition
-- customer retention
-- scheduling
-- communication
-- operational inefficiency
-- data entry
-- payments
-- approvals
-- coordination between systems or people
+willingnessToPayScore:
+0-10 based on how likely a clear customer
+would be to pay to solve the problem.
 
-Avoid prioritizing problems merely because they are emotionally unpleasant.
+automationFitScore:
+0-10 based on how suitable the problem is
+for software, AI, automation, or a scalable service.
 
-For example:
+Also provide:
 
-"Patients are scared of dentists"
+- 1 to 3 evidence items
+- concrete business opportunity
+- likely paying customer
+- why they would pay
+- cheap validation experiment
 
-is generally less commercially attractive than:
+Do NOT provide:
 
-"Dental practices lose revenue because patients fail to attend appointments"
+- frequencyScore
+- severityScore
+- evidenceScore
 
-unless there is a clear paying customer and business mechanism.
+Those are calculated separately by software.
 
-For every problem provide:
+Prefer commercially meaningful problems involving:
 
-1. A concise title.
+- employee time
+- costs
+- revenue
+- errors
+- risk
+- repeated administrative work
+- inefficient software
+- operational bottlenecks
 
-2. A clear description of the recurring problem.
+CLUSTERS:
 
-3. A score from 0 to 100.
-
-The score should reflect:
-
-- 25% severity / cost
-- 25% frequency
-- 20% likelihood someone would pay
-- 15% suitability for software or automation
-- 15% evidence strength
-
-4. Between 1 and 3 pieces of evidence.
-
-For EACH piece of evidence return:
-
-- text: the relevant evidence
-- source: EXACTLY the Source provided in the conversation
-- url: EXACTLY the URL provided in the conversation
-
-5. A concrete business opportunity.
-
-Avoid generic ideas such as:
-
-"An AI platform for dentists."
-
-Prefer specific ideas such as:
-
-"Software that automatically prepares insurance claim documentation
-from patient records for independent dental practices."
-
-6. The most likely paying customer.
-
-7. Why that customer would pay.
-
-Connect this to:
-
-- employee hours saved
-- additional revenue
-- reduced costs
-- fewer errors
-- better retention
-- reduced operational risk
-
-8. A cheap validation experiment that can be performed BEFORE building
-the product.
-
-Only use information supported by the supplied conversations.
-
-CONVERSATIONS:
-
-${conversationText}
+${clusterText}
 `,
+                },
+            ],
+
+            text: {
+                format: zodTextFormat(
+                    AnalysisSchema,
+                    "business_analysis"
+                ),
             },
-        ],
+        });
 
-        text: {
-            format: zodTextFormat(
-                PainAnalysisSchema,
-                "pain_analysis"
-            ),
-        },
-    });
-
-    const result = response.output_parsed;
+    const result =
+        response.output_parsed;
 
     if (!result) {
         throw new Error(
-            "OpenAI did not return a valid structured response"
+            "Business analysis failed"
         );
     }
 
-    return result.pains;
+    const pains: Pain[] =
+        result.clusters
+            .map((evaluation) => {
+                const cluster =
+                    clusters[
+                    evaluation.clusterIndex
+                    ];
+
+                const metadata =
+                    clusterMetadata[
+                    evaluation.clusterIndex
+                    ];
+
+                if (!cluster || !metadata) {
+                    return null;
+                }
+
+                const finalScore =
+                    metadata.frequencyScore * 2.5 +
+                    metadata.severityScore * 2.5 +
+                    evaluation.willingnessToPayScore * 2 +
+                    evaluation.automationFitScore * 1.5 +
+                    metadata.evidenceScore * 1.5;
+
+                return {
+                    title:
+                        cluster.title,
+
+                    description:
+                        cluster.description,
+
+                    score:
+                        Math.round(finalScore),
+
+                    frequencyScore:
+                        metadata.frequencyScore,
+
+                    severityScore:
+                        metadata.severityScore,
+
+                    willingnessToPayScore:
+                        evaluation.willingnessToPayScore,
+
+                    automationFitScore:
+                        evaluation.automationFitScore,
+
+                    evidenceScore:
+                        metadata.evidenceScore,
+
+                    supportingConversations:
+                        metadata.supportingConversations,
+
+                    uniqueSources:
+                        metadata.uniqueSources,
+
+                    evidence:
+                        evaluation.evidence,
+
+                    opportunity:
+                        evaluation.opportunity,
+
+                    customer:
+                        evaluation.customer,
+
+                    whyTheyWouldPay:
+                        evaluation.whyTheyWouldPay,
+
+                    validationExperiment:
+                        evaluation.validationExperiment,
+                };
+            })
+            .filter(
+                (pain): pain is Pain =>
+                    pain !== null
+            );
+
+    return pains
+        .sort(
+            (a, b) =>
+                b.score - a.score
+        )
+        .slice(0, 5);
 }
