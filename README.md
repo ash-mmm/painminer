@@ -1,5 +1,11 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## About PainMiner
+
+PainMiner helps you discover recurring problems and potential business opportunities in a market. Enter an audience or industry, such as recruiters, dentists, or property managers, and the app searches online conversations, uses AI to identify and group common pain points, and ranks them by frequency, severity, willingness to pay, automation potential, and evidence quality.
+
+Results include supporting source links, suggested business opportunities, likely paying customers, and simple validation experiments to help you decide which problems are worth investigating.
+
 ## Getting Started
 
 First, run the development server:
